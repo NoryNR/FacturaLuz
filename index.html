@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LuzHoy - Precio de la Electricidad PVPC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="site-header">
+    <div class="header-left">
+      <div class="logo-mark">
+        <img src="logo.png" style=" width: 5rem; height: auto; ">
+        <span class="logo-text">TarifasLuz</span>
+      </div>
+      <div class="source-badge">
+        <span class="dot"></span>
+        Datos: ESIOS · Red Eléctrica Española
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="live-clock" id="liveClock">--:--:--</div>
+      <div class="date-display" id="dateDisplay">--</div>
+    </div>
+  </header>
+
+  <!-- HERO: CURRENT PRICE -->
+  <section class="hero-section">
+    <div class="hero-grid">
+
+      <!-- LEFT: Integrated Price + Clock Widget -->
+      <div class="hero-left">
+        <div class="clock-card" id="clockCard">
+          <div class="card-eyebrow">Distribución horaria</div>
+
+          <div class="clock-body">
+            <!-- Left column: Price card -->
+             <div class="clock-canvas-col">
+              <canvas id="radialClock" width="320" height="320"></canvas>
+              <div class="clock-legend">
+                <span class="leg-item leg-cheap">Barato</span>
+                <span class="leg-item leg-mid">Medio</span>
+                <span class="leg-item leg-exp">Caro</span>
+              </div>
+            </div>
+
+            <!-- Right column: Radial clock -->
+             <div class="clock-price-col">
+              <div class="gauge-card">
+                <div class="card-eyebrow">Posición precio actual</div>
+                <canvas id="gaugeChart" width="420" height="220"></canvas>
+                <div class="gauge-label" id="gaugeLabel">--</div>
+                <div class="percentile-text" id="percentileText">Percentil --</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Stats + Best Windows (replacing Alarm) -->
+      <div class="hero-right">
+        <div class="stats-grid">
+          <div class="stat-card" id="minCard">
+            <div class="stat-label">Mínimo hoy</div>
+            <div class="stat-value" id="minPrice">--</div>
+            <div class="stat-sub" id="minHour">--</div>
+          </div>
+          <div class="stat-card" id="maxCard">
+            <div class="stat-label">Máximo hoy</div>
+            <div class="stat-value" id="maxPrice">--</div>
+            <div class="stat-sub" id="maxHour">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Media hoy</div>
+            <div class="stat-value" id="avgPrice">--</div>
+            <div class="stat-sub">€/kWh</div>
+          </div>
+        </div>
+
+        <!-- BEST WINDOWS (replacing alarm card) -->
+        <div class="best-windows-card" id="bestWindowsCard">
+          <div class="card-eyebrow">Mejores ventanas de 3 horas para consumir</div>
+          <div class="windows-list" id="windowsList">
+            <div class="loading-msg">Calculando mejores horas...</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- TAB NAVIGATION -->
+  <div class="tab-nav">
+    <button class="tab-btn active" data-tab="today">Hoy</button>
+    <button class="tab-btn" data-tab="tomorrow">Mañana</button>
+    <button class="tab-btn" data-tab="history">Historial</button>
+    <button class="tab-btn" data-tab="compare">Comparar</button>
+  </div>
+
+  <!-- HISTORIAL SECTION (hidden by default) -->
+  <section class="history-section" id="historySection" style="display:none">
+    <div class="history-controls">
+      <span class="history-label">Últimos:</span>
+      <div class="history-range-btns">
+        <button class="history-range-btn active" data-days="7">7 días</button>
+        <button class="history-range-btn" data-days="14">14 días</button>
+        <button class="history-range-btn" data-days="30">30 días</button>
+        <button class="history-range-btn" data-days="custom" id="historyCustomBtn">Otro</button>
+      </div>
+      <div class="history-custom-dates" id="historyCustomDates" style="display:none">
+        <label for="historyStartDate" class="history-label">Desde:</label>
+        <input type="date" id="historyStartDate" class="history-date-input" />
+        <label for="historyEndDate" class="history-label">Hasta:</label>
+        <input type="date" id="historyEndDate" class="history-date-input" />
+        <button class="history-load-btn" id="historyLoadBtn">Cargar</button>
+      </div>
+    </div>
+
+    <div class="history-content" id="historyContent" style="display:none">
+      <div class="history-title-area">
+        <div class="chart-title" id="historyTitle">Evolución de precios</div>
+      </div>
+
+      <!-- COMPARISON CHART: Min/Max/Avg per day -->
+      <div class="history-comparison-wrapper">
+        <canvas id="historyComparisonChart" width="1200" height="320"></canvas>
+      </div>
+      <div class="history-chart-legend">
+        <span class="legend-item legend-max" style="background:var(--red)">● Máximos</span>
+        <span class="legend-item legend-avg" style="background:var(--amber)">● Medios</span>
+        <span class="legend-item legend-min" style="background:var(--green)">● Mínimos</span>
+      </div>
+
+      <!-- DAILY BREAKDOWN TABLE -->
+      <div class="history-table-wrapper">
+        <table class="history-table" id="historyTable">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Mínimo (€/kWh)</th>
+              <th>Hora Mín</th>
+              <th>Máximo (€/kWh)</th>
+              <th>Hora Máx</th>
+              <th>Media (€/kWh)</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody">
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="history-empty" id="historyEmpty">
+      <p>Selecciona un rango para ver la evolución de precios históricos.</p>
+    </div>
+  </section>
+
+  <!-- COMPARE SECTION (hidden by default) -->
+  <section class="compare-section" id="compareSection" style="display:none">
+    <div class="compare-controls">
+      <label for="compareDate" class="compare-label">Comparar hoy con el día:</label>
+      <input type="date" id="compareDate" class="compare-date-input" />
+      <button class="compare-load-btn" id="compareLoadBtn">Comparar</button>
+    </div>
+
+    <div class="compare-content" id="compareContent" style="display:none">
+      <div class="compare-title-area">
+        <div class="chart-title" id="compareTitle">Comparativa de precios</div>
+      </div>
+
+      <div class="compare-summary" id="compareSummary"></div>
+
+      <div class="compare-chart-wrapper">
+        <canvas id="compareChart" width="1200" height="340"></canvas>
+      </div>
+
+      <div class="compare-chart-legend">
+        <span class="legend-item"><span class="legend-swatch legend-swatch-today"></span>Hoy</span>
+        <span class="legend-item" id="compareLegendOther"><span class="legend-swatch legend-swatch-other"></span>Día seleccionado</span>
+      </div>
+    </div>
+
+    <div class="compare-empty" id="compareEmpty">
+      <p>Selecciona una fecha para comparar su tarifa con la de hoy.</p>
+    </div>
+  </section>
+
+  <!-- BAR CHART SECTION -->
+  <section class="chart-section">
+    <div class="chart-header">
+      <div class="chart-title" id="chartTitle">Tarifas por hora — Hoy</div>
+      <div class="chart-modes" id="chartModes" aria-label="Modo de visualización">
+        <button class="chart-mode-btn active" data-mode="bars" aria-label="Vista de barras">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <line x1="5" y1="20" x2="5" y2="11"/>
+            <line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="19" y1="20" x2="19" y2="14"/>
+          </svg>
+          <span>Barras</span>
+        </button>
+        <button class="chart-mode-btn" data-mode="wave" aria-label="Vista de onda">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 14c3 0 3-7 6-7s3 9 6 9 3-5 6-5"/>
+          </svg>
+          <span>Onda</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="chart-insights" id="chartInsights"></div>
+
+    <div class="bar-chart-wrapper">
+      <canvas id="barChart" width="1100" height="300"></canvas>
+    </div>
+
+    <div class="chart-detail" id="chartDetail"></div>
+  </section>
+
+  <!-- BOTTOM GRID: Heatmap + Windows | Gauge -->
+  <section class="bottom-grid">
+    <!-- LEFT: Heatmap + Windows -->
+    <div class="bottom-left">
+      <div class="heatmap-card">
+        <div class="card-eyebrow">Mapa de calor — 24h</div>
+        <div class="heatmap-grid" id="heatmapGrid"></div>
+        <div class="heatmap-scale">
+          <span>Más barato</span>
+          <div class="scale-bar"></div>
+          <span>Más caro</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="site-footer">
+    <div>Datos en tiempo real del PVPC (Precio Voluntario para el Pequeño Consumidor)</div>
+    <div>Fuente oficial: <span style=" color: var(--green); ">ESIOS · Red Eléctrica de España</span></div>
+  </footer>
+
+  <!-- FLOATING CALCULATE BUTTON -->
+  <button class="floating-calc-btn" id="floatingCalcBtn" aria-label="Calcular costes">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="2" width="16" height="20" rx="2"/>
+      <line x1="8" y1="6" x2="16" y2="6"/>
+      <line x1="8" y1="10" x2="10" y2="10"/>
+      <line x1="14" y1="10" x2="16" y2="10"/>
+      <line x1="8" y1="14" x2="10" y2="14"/>
+      <line x1="14" y1="14" x2="16" y2="14"/>
+      <line x1="8" y1="18" x2="16" y2="18"/>
+    </svg>
+    Calcular costes
+  </button>
+
+  <!-- COST CALCULATOR MODAL -->
+  <div class="calc-modal" id="calcModal" style="display:none">
+    <div class="calc-modal-backdrop" id="calcModalBackdrop"></div>
+    <div class="calc-modal-content">
+      <button class="calc-modal-close" id="calcModalClose" aria-label="Cerrar">✕</button>
+
+      <!-- STEP 1: Choose mode -->
+      <div class="calc-step" id="calcStep1">
+        <h2 class="calc-title">Calcular costes</h2>
+        <p class="calc-subtitle">¿Cómo quieres seleccionar las franjas horarias?</p>
+        <div class="calc-mode-cards">
+          <button class="calc-mode-card" data-mode="auto" id="calcModeAuto">
+            <div class="mode-icon">💡</div>
+            <div class="mode-title">Recomiéndame las mejores franjas</div>
+            <div class="mode-desc">Encuentra automáticamente las horas más baratas del día</div>
+          </button>
+          <button class="calc-mode-card" data-mode="manual" id="calcModeManual">
+            <div class="mode-icon">✋</div>
+            <div class="mode-title">Seleccionar franja manualmente</div>
+            <div class="mode-desc">Elige tú mismo la hora de inicio y duración</div>
+          </button>
+        </div>
+      </div>
+
+      <!-- STEP 2: Auto mode — select duration -->
+      <div class="calc-step" id="calcStep2" style="display:none">
+        <button class="calc-back-btn" id="calcBackToStep1">← Volver</button>
+        <h2 class="calc-title">¿Cuántas horas necesitas?</h2>
+        <p class="calc-subtitle">Te encontraré las franjas más baratas del día</p>
+        <div class="calc-power-field">
+          <label for="autoPower">¿Cuántos vatios vas a consumir?</label>
+          <div class="calc-power-input-wrap">
+            <input type="number" id="autoPower" value="2000" min="1" max="100000" step="100" class="calc-input" />
+            <span class="calc-power-unit">W</span>
+          </div>
+          <span class="calc-power-hint">Calcularemos el coste de cada franja según este consumo por hora</span>
+        </div>
+        <div class="calc-duration-grid">
+          <button class="duration-btn" data-dur="1">1h</button>
+          <button class="duration-btn" data-dur="2">2h</button>
+          <button class="duration-btn" data-dur="3">3h</button>
+          <button class="duration-btn" data-dur="4">4h</button>
+          <button class="duration-btn" data-dur="6">6h</button>
+          <button class="duration-btn" data-dur="8">8h</button>
+          <button class="duration-btn" data-dur="12">12h</button>
+          <button class="duration-btn custom-duration-btn" id="customDurationBtn">Otro</button>
+        </div>
+        <div class="calc-custom-duration">
+          <div class="custom-duration-inputs" id="customDurationInputs" style="display:none">
+            <div class="custom-duration-field">
+              <label for="customHours">Horas</label>
+              <input type="number" id="customHours" min="0" max="23" value="0" class="calc-input-number">
+            </div>
+            <div class="custom-duration-field">
+              <label for="customMinutes">Minutos</label>
+              <input type="number" id="customMinutes" min="0" max="59" value="0" class="calc-input-number">
+            </div>
+            <button class="custom-duration-apply" id="customDurationApply">Aplicar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 3: Manual mode — select hours -->
+      <div class="calc-step" id="calcStep3" style="display:none">
+        <button class="calc-back-btn" id="calcBackToStep1Manual">← Volver</button>
+        <h2 class="calc-title">Selecciona tu franja horaria</h2>
+        <p class="calc-subtitle">Elige la hora de inicio y cuánto tiempo vas a consumir</p>
+        <div class="calc-manual-controls">
+          <div class="manual-field">
+            <label for="manualStartHour">Hora de inicio</label>
+            <select id="manualStartHour" class="calc-select">
+              <option value="0">00:00</option>
+              <option value="1">01:00</option>
+              <option value="2">02:00</option>
+              <option value="3">03:00</option>
+              <option value="4">04:00</option>
+              <option value="5">05:00</option>
+              <option value="6">06:00</option>
+              <option value="7">07:00</option>
+              <option value="8">08:00</option>
+              <option value="9">09:00</option>
+              <option value="10">10:00</option>
+              <option value="11">11:00</option>
+              <option value="12">12:00</option>
+              <option value="13">13:00</option>
+              <option value="14">14:00</option>
+              <option value="15">15:00</option>
+              <option value="16">16:00</option>
+              <option value="17">17:00</option>
+              <option value="18">18:00</option>
+              <option value="19">19:00</option>
+              <option value="20">20:00</option>
+              <option value="21">21:00</option>
+              <option value="22">22:00</option>
+              <option value="23">23:00</option>
+            </select>
+          </div>
+          <div class="manual-field">
+            <label for="manualDuration">Duración (horas)</label>
+            <select id="manualDuration" class="calc-select">
+              <option value="1">1 hora</option>
+              <option value="2">2 horas</option>
+              <option value="3">3 horas</option>
+              <option value="4">4 horas</option>
+              <option value="6">6 horas</option>
+              <option value="8">8 horas</option>
+            </select>
+          </div>
+          <div class="manual-field">
+            <label for="manualPower">Potencia (vatios)</label>
+            <input type="number" id="manualPower" value="2000" min="100" max="100000" step="100" class="calc-input" />
+          </div>
+        </div>
+        <button class="calc-apply-btn" id="calcManualApply">Calcular</button>
+      </div>
+
+      <!-- STEP 4: Results -->
+      <div class="calc-step" id="calcStep4" style="display:none">
+        <h2 class="calc-title">Resultados</h2>
+        <div class="calc-results-container" id="calcResults">
+          <!-- Results injected by JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOOLTIP (fixed position, follows mouse) -->
+  <div class="tooltip-box" id="tooltipBox" style="display:none">
+    <div class="tt-hour" id="ttHour">--:00</div>
+    <div class="tt-price" id="ttPrice">--</div>
+    <div class="tt-tier" id="ttTier">--</div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
