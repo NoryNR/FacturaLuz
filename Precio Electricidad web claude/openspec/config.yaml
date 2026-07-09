@@ -1,0 +1,95 @@
+schema: spec-driven
+
+# OpenSpec standard
+context: "Vanilla JavaScript, browser runtime, no framework"
+rules:
+  proposal:
+    - Why, What Changes, Capabilities, Impact — no architecture
+  specs:
+    - Use Given/When/Then format
+    - Clean Requirement headers; SHALL/MUST in the normative sentence, never in the header
+  design:
+    - Logical responsibilities only; no class/file names
+  tasks:
+    - Size tasks for single-session completion
+    - Use checkbox format `- [ ] N.M {description}`
+
+# Conductor extensions
+x-conductor:
+  stack:
+    language: "javascript"
+    runtime: "browser"
+    version: ""
+    framework: "none"
+    package_manager: "none"
+  monorepo: false
+  auto_mode: false
+  strict_tdd: false
+  testing:
+    detected: "none"
+    test_runner: { command: "", framework: "" }
+    layers: { unit: false, integration: false, e2e: false }
+    coverage: { available: false, command: "" }
+    quality: { linter: "", type_checker: "", formatter: "" }
+
+  # DECLARATIVE PIPELINE — the orchestrator reads this and dispatches agents in order
+  pipeline:
+    max_review_cycles: 2
+    agent_timeout_seconds: 300
+    phases:
+      - name: explore
+        agent: sdd-planner
+        optional: true
+        artifact: exploration.md
+        max_words: 4000
+
+      - name: propose
+        agent: sdd-planner
+        optional: false
+        artifact: proposal.md
+        max_words: 4000
+
+      - name: clarify
+        agent: sdd-planner
+        optional: true
+        artifact: questions.md
+        max_words: 3000
+
+      - name: spec
+        agent: sdd-planner
+        optional: false
+        artifact: specs/{domain}/spec.md
+        max_words: 6500
+
+      - name: design
+        agent: sdd-planner
+        optional: true
+        artifact: design.md
+        max_words: 8000
+
+      - name: tasks
+        agent: sdd-planner
+        optional: true
+        artifact: tasks.md
+        max_words: 5300
+
+      - name: apply
+        agent: sdd-coder
+        optional: false
+        artifact: apply-report.md
+        pre_hook: ""
+        post_hook: ""
+        post_hook_on_fail: retry
+        post_hook_max_retries: 3
+
+      - name: verify
+        agent: sdd-reviewer
+        optional: false
+        artifact: verify-report.md
+        test_command: ""
+        build_command: ""
+        coverage_threshold: 0
+
+      - name: archive
+        agent: orchestrator
+        optional: true

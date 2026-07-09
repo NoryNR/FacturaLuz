@@ -1,0 +1,10 @@
+change: usage-slot-widget
+status: complete
+current_phase: verify
+phases:
+  propose: done
+  spec: done
+  design: done
+  tasks: done
+  apply: done
+  verify: pass
