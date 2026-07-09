@@ -1745,7 +1745,7 @@ async function calculateAndShowResults() {
         <div class="calc-result-card ${isBest ? 'best' : ''}">
           ${isBest
             ? '<span class="calc-result-rank best-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg><span>Mejor</span></span>'
-            : `<span class="calc-result-rank">${medals[i]}<span>#${i+1}</span></span>`}
+            : `<span class="calc-result-rank">${medals[i]}</span>`}
           <div class="calc-result-title-area">
             <div>
               <div class="calc-result-time">${fmtHour(slot.start)} – ${endTimeStr}</div>
@@ -1758,8 +1758,6 @@ async function calculateAndShowResults() {
           <div class="calc-result-info">
             <div class="calc-result-price">
               Precio: <strong style="color:${col}">${fmtKwh(slot.avg)}</strong>
-              &nbsp;·&nbsp;
-              ${fmtMWh(slot.avg)} €/MWh
             </div>
             <div class="calc-result-cost">${costEur.toFixed(4).replace('.', ',')} €</div>
             <div class="calc-result-hours">${pillsHtml}</div>
@@ -1797,8 +1795,6 @@ async function calculateAndShowResults() {
           <div class="calc-result-info">
             <div class="calc-result-price">
               Precio: <strong style="color:${wCol}">${fmtKwh(worst.avg)}</strong>
-              &nbsp;·&nbsp;
-              ${fmtMWh(worst.avg)} €/MWh
             </div>
             <div class="calc-result-cost worst-cost">${worstCost.toFixed(4).replace('.', ',')} €</div>
             <div class="calc-result-extra">Pagarías <strong>${extraCost.toFixed(4).replace('.', ',')} €</strong> más que en la mejor franja</div>
@@ -1808,6 +1804,7 @@ async function calculateAndShowResults() {
     }
 
     resultsEl.innerHTML = html;
+    showCalcStep(4); // reveal first so mini-charts measure the final visible layout
 
     // Draw mini charts for each recommended card
     slotsData.forEach((slotData, i) => {
@@ -1867,8 +1864,6 @@ async function calculateAndShowResults() {
         <div class="calc-result-info">
           <div class="calc-result-price">
             Precio medio: <strong style="color:${col}">${fmtKwh(avgPrice)}</strong>
-            &nbsp;·&nbsp;
-            ${fmtMWh(avgPrice)} €/MWh
           </div>
           ${calcState.power > 0 ? `<div class="calc-result-cost">${costEur.toFixed(4).replace('.', ',')} €</div>` : ''}
           <div class="calc-result-hours">${pillsHtml}</div>
@@ -1876,73 +1871,58 @@ async function calculateAndShowResults() {
       </div>`;
 
     resultsEl.innerHTML = html;
+    showCalcStep(4); // reveal first so the mini-chart measures the final visible layout
 
     // Draw mini chart for manual selection
     const manualCanvas = resultsEl.querySelector('.calc-mini-chart[data-idx="manual"]');
     if (manualCanvas) drawMiniChart(manualCanvas, prices, manualSlotData);
   }
-
-  showCalcStep(4);
 }
 
 // ─── MINI CHART FOR RESULT CARDS ─────────────────────────────────────────────
+// A 24-hour price sparkline where the recommended slot's hours are lit up and the
+// rest are dimmed. CSS owns the canvas box (fixed on desktop, full-width on phones)
+// so we read its rendered size and match the Hi-DPI backing store for crisp bars.
 function drawMiniChart(canvas, prices, slotData) {
   const ctx = canvas.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
 
-  // Chart width fills cell, height enlarged for better visibility
-  const W = 200, H = 60;
-  canvas.width = W * 2;
-  canvas.height = H * 2;
-  canvas.style.width = '50%';
-  canvas.style.height = H + 'px';
-  canvas.style.height = H + 'px !important';
-  canvas.style.marginLeft = '10%';
-  ctx.scale(2, 2);
-
+  const rect = canvas.getBoundingClientRect();
+  const W = Math.max(1, Math.round(rect.width) || canvas.clientWidth || 180);
+  const H = Math.max(1, Math.round(rect.height) || canvas.clientHeight || 56);
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
 
   if (!prices.length) return;
 
-  // All 24 hours, tall bar = expensive, short bar = cheap
-  const maxVal = Math.max(...prices.map(p => p.price)) * 1.1;
+  // Tall bar = pricier hour. Slot hours use the price gradient, the rest stay dim.
+  const maxVal = Math.max(...prices.map(p => p.price)) * 1.08;
   const n = prices.length;
-  const barW = W / n;
-  const gap = 2.5; // Even wider gap = ultra-thin bars
+  const slotW = W / n;
+  const barW = Math.max(1, slotW - Math.min(2.5, slotW * 0.32));
   const slotHours = slotData.hours;
 
   prices.forEach((p, i) => {
-    const x = i * barW;
-    const bw = Math.max(0.5, barW - gap); // Minimum 0.5px bar (super thin)
-    // Direct proportion: higher price = taller bar
-    const norm = p.price / maxVal;
-    const bh = Math.max(1, norm * (H - 1));
-    const y = H - 1 - bh;
-
+    const x = i * slotW + (slotW - barW) / 2;
+    const bh = Math.max(2, (p.price / maxVal) * (H - 2));
+    const y = H - bh;
     const isSlotHour = slotHours.has(p.hour);
 
-    if (isSlotHour) {
-      // Bright colored for recommended slot
-      const col = priceGradientColor(normalizePrice(p.price, prices));
-      ctx.fillStyle = col;
-    } else {
-      // Dimmed gray for non-recommended hours
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
-    }
+    ctx.fillStyle = isSlotHour
+      ? priceGradientColor(normalizePrice(p.price, prices))
+      : 'rgba(255, 255, 255, 0.12)';
 
-    // Super thin bars, slightly rounded top only for highlighted
-    const r = Math.min(0.5, bw / 2);
+    // Rounded-top bar
+    const r = Math.min(barW / 2, 2);
     ctx.beginPath();
-    if (isSlotHour && bw > 3) {
-      ctx.moveTo(x + r, y);
-      ctx.lineTo(x + bw - r, y);
-      ctx.quadraticCurveTo(x + bw, y, x + bw, y + r);
-      ctx.lineTo(x + bw, H - 1);
-      ctx.lineTo(x, H - 1);
-      ctx.lineTo(x, y + r);
-      ctx.quadraticCurveTo(x, y, x + r, y);
-    } else {
-      ctx.rect(x, y, bw, bh);
-    }
+    ctx.moveTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.lineTo(x + barW - r, y);
+    ctx.arcTo(x + barW, y, x + barW, y + r, r);
+    ctx.lineTo(x + barW, H);
+    ctx.lineTo(x, H);
     ctx.closePath();
     ctx.fill();
   });

@@ -2143,6 +2143,10 @@ body::before {
   line-height: 1.5;
 }
 
+.calc-result-mwh {
+  white-space: nowrap;
+}
+
 .calc-result-cost {
   font-size: 1.5rem;
   font-weight: 700;
@@ -2260,10 +2264,12 @@ body::before {
 
 /* Mini chart */
 .calc-mini-chart {
-  grid-area: chart;
-  width: 100%;
-  height: 100%;
+  flex: 0 0 auto;
+  width: 180px;
+  height: 56px;
+  margin-left: auto;
   background: rgb(17 24 39);
+  border-radius: 8px;
   display: block;
 }
 
@@ -2295,6 +2301,86 @@ body::before {
 @media (max-width: 480px) {
   .calc-duration-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ── Phone: stack result cards for a cleaner, more visual layout ─────────── */
+@media (max-width: 560px) {
+  .calc-result-card {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    grid-template-areas:
+      "badge"
+      "title"
+      "info";
+    margin-bottom: 14px;
+  }
+
+  /* Rank badge becomes a slim ribbon across the top of the card */
+  .calc-result-rank {
+    font-size: 1.5rem;
+    flex-direction: row;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+    width: 100%;
+    padding: 8px 14px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .calc-result-rank svg {
+    width: 16px;
+    height: 16px;
+  }
+  .calc-result-rank span {
+    font-size: 0.72rem;
+    letter-spacing: 1.5px;
+  }
+  .calc-result-rank.worst-badge {
+    font-size: 1.5rem;
+  }
+
+  /* Title row: big time range + duration on one line, chart full-width below */
+  .calc-result-title-area {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+  .calc-result-title-area > div:first-child {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+  }
+  .calc-result-time {
+    font-size: 1.4rem;
+    white-space: nowrap;
+  }
+  .calc-result-summary {
+    margin-top: 0;
+  }
+
+  .calc-mini-chart {
+    width: 100%;
+    height: 52px;
+    margin-left: 0;
+  }
+
+  /* Info: total cost is the hero number, price context sits below it */
+  .calc-result-info {
+    padding: 14px 16px 18px;
+    gap: 4px;
+  }
+  .calc-result-price {
+    font-size: 0.8rem;
+  }
+  .calc-result-cost {
+    font-size: 1.85rem;
+  }
+  .calc-result-hours {
+    margin-top: 8px;
   }
 }
 
