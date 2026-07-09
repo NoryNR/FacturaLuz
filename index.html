@@ -211,6 +211,9 @@
       </div>
     </div>
 
+    <!-- "Mañana" overlay: countdown before 20:30 ES, loading / error otherwise -->
+    <div class="tomorrow-pending" id="tomorrowPending" style="display:none"></div>
+
     <div class="chart-insights" id="chartInsights"></div>
 
     <div class="bar-chart-wrapper">
@@ -262,9 +265,30 @@
     <div class="calc-modal-content">
       <button class="calc-modal-close" id="calcModalClose" aria-label="Cerrar">✕</button>
 
+      <!-- STEP 0: Choose day -->
+      <div class="calc-step" id="calcStepDay">
+        <h2 class="calc-title">¿Para qué día quieres calcular?</h2>
+        <p class="calc-subtitle">Elige el día cuyas tarifas se usarán en el cálculo</p>
+        <div class="calc-mode-cards">
+          <button class="calc-mode-card" data-day="today" id="calcDayToday">
+            <div class="mode-icon">☀️</div>
+            <div class="mode-title">Hoy</div>
+            <div class="mode-desc">Tarifas de hoy, disponibles ahora</div>
+          </button>
+          <button class="calc-mode-card" data-day="tomorrow" id="calcDayTomorrow">
+            <span class="calc-day-lock" id="calcDayLock" aria-hidden="true">🔒</span>
+            <div class="mode-icon">🌙</div>
+            <div class="mode-title">Mañana</div>
+            <div class="mode-desc" id="calcDayTomorrowDesc">Tarifas del día siguiente</div>
+          </button>
+        </div>
+        <div class="calc-day-warning" id="calcDayWarning" style="display:none"></div>
+      </div>
+
       <!-- STEP 1: Choose mode -->
-      <div class="calc-step" id="calcStep1">
-        <h2 class="calc-title">Calcular costes</h2>
+      <div class="calc-step" id="calcStep1" style="display:none">
+        <button class="calc-back-btn" id="calcBackToDay">← Cambiar día</button>
+        <h2 class="calc-title">Calcular costes <span class="calc-day-chip" id="calcModeDayLabel">Hoy</span></h2>
         <p class="calc-subtitle">¿Cómo quieres seleccionar las franjas horarias?</p>
         <div class="calc-mode-cards">
           <button class="calc-mode-card" data-mode="auto" id="calcModeAuto">

@@ -34,6 +34,7 @@ function getThresholdMid(prices) {
 const state = {
   todayPrices:    [],
   tomorrowPrices: [],
+  tomorrowLoaded: false, // real next-day prices fetched (published after 20:30 ES)
   historyPrices:  [],
   historyDayData: [], // [{ dateStr, date, min, max, avg, minHour, maxHour, prices[] }]
   comparePrices:  [], // selected day's prices [{ hour, price, datetime }] for the compare tab
@@ -181,27 +182,25 @@ function showDemoBanner() {
 }
 
 async function loadPrices() {
-  const today    = getTodayStr();
-  const tomorrow = getTomorrowStr();
+  const today = getTodayStr();
 
   let todayData = await fetchREDataPrices(today);
   if (!todayData?.length) todayData = await fetchESIOSPrices(today);
   if (!todayData?.length) { todayData = generateDemoPrices(today, 0); showDemoBanner(); }
 
-  let tomorrowData = await fetchREDataPrices(tomorrow);
-  if (!tomorrowData?.length) tomorrowData = await fetchESIOSPrices(tomorrow);
-  // If still no tomorrow data, generate demo for tomorrow
-  if (!tomorrowData?.length) {
-    tomorrowData = generateDemoPrices(tomorrow, 1);
-    document.querySelector('[data-tab="tomorrow"]').textContent = 'Mañana (demo)';
-  } else {
-    document.querySelector('[data-tab="tomorrow"]').textContent = 'Mañana ✓';
-  }
-
-  state.todayPrices    = todayData;
-  state.tomorrowPrices = tomorrowData;
-  state.loadedDayStr   = today;
+  state.todayPrices  = todayData;
+  state.loadedDayStr = today;
   return true;
+}
+
+// Tomorrow's PVPC tariffs are fetched lazily — only when the user opens the
+// "Mañana" tab after 20:30 ES, once REE has actually published them. No demo
+// fallback here: before 20:30 the data genuinely does not exist yet.
+async function loadTomorrowPrices() {
+  const tomorrow = getTomorrowStr();
+  let data = await fetchREDataPrices(tomorrow);
+  if (!data?.length) data = await fetchESIOSPrices(tomorrow);
+  return data?.length ? data : [];
 }
 
 async function loadHistoryDate(dateStr) {
@@ -223,6 +222,30 @@ function toLocalDateStr(d) {
 }
 function getTodayStr()    { return toLocalDateStr(new Date()); }
 function getTomorrowStr() { const d = new Date(); d.setDate(d.getDate()+1); return toLocalDateStr(d); }
+
+// Current time in Spain (Europe/Madrid) regardless of the visitor's own
+// timezone — REE publishes the next day's PVPC tariffs around 20:30 ES.
+const TOMORROW_PUBLISH_MINUTES = 20 * 60 + 30; // 20:30
+function spanishNowParts() {
+  try {
+    const parts = new Intl.DateTimeFormat('es-ES', {
+      timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date());
+    const get = t => Number(parts.find(p => p.type === t)?.value);
+    const h = get('hour'), m = get('minute'), s = get('second');
+    if ([h, m, s].every(Number.isFinite)) return { h, m, s };
+  } catch { /* Intl timezone data unavailable → fall back to device-local time */ }
+  const now = new Date();
+  return { h: now.getHours(), m: now.getMinutes(), s: now.getSeconds() };
+}
+function spanishNowMinutes() { const { h, m } = spanishNowParts(); return h * 60 + m; }
+function tomorrowPricesAvailable() { return spanishNowMinutes() >= TOMORROW_PUBLISH_MINUTES; }
+
+// True only on devices with a real hovering pointer (desktop mouse / trackpad).
+// Used to keep hover-only affordances (price tooltips) off touch phones.
+function prefersHover() {
+  return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+}
 
 // ─── CLOCK ───────────────────────────────────────────────────────────────────
 function updateClock() {
@@ -709,10 +732,16 @@ function barIndexFromClientX(clientX) {
   return (idx >= 0 && idx < ps.length) ? idx : -1;
 }
 
+// Suppress the "ghost" mouse events (mousemove / click) that browsers fire right
+// after a touch, so a tap on mobile is handled once — by the touch handlers below.
+let lastBarTouchTs = 0;
+function recentBarTouch() { return Date.now() - lastBarTouchTs < 700; }
+
 function bindBarChartEvents() {
   const canvas = document.getElementById('barChart');
 
   canvas.addEventListener('mousemove', e => {
+    if (recentBarTouch()) return;
     const idx = barIndexFromClientX(e.clientX);
     if (idx < 0) return;
     const ps = activePrices();
@@ -724,6 +753,7 @@ function bindBarChartEvents() {
   });
 
   canvas.addEventListener('mouseleave', () => {
+    if (recentBarTouch()) return;
     hoveredIdx = null;
     hideTooltip();
     drawBarChart(activePrices(), 1);
@@ -731,6 +761,7 @@ function bindBarChartEvents() {
   });
 
   canvas.addEventListener('click', e => {
+    if (recentBarTouch()) return;
     const idx = barIndexFromClientX(e.clientX);
     if (idx < 0) return;
     state.chartSelIdx = (state.chartSelIdx === idx) ? null : idx;
@@ -739,16 +770,24 @@ function bindBarChartEvents() {
     updateChartDetail(activePrices(), state.chartSelIdx);
   });
 
-  canvas.addEventListener('touchstart', e => {
-    const idx = barIndexFromClientX(e.touches[0].clientX);
-    if (idx < 0) return;
+  // Touch: a single tap pins that bar's price in the detail block below the chart
+  // and keeps it there — no tooltip, and no need to hold the finger down.
+  const touchSelect = clientX => {
+    lastBarTouchTs = Date.now();
+    const idx = barIndexFromClientX(clientX);
+    if (idx < 0 || idx === state.chartSelIdx) return;
     const ps = activePrices();
-    hoveredIdx = idx;
+    hoveredIdx = null;
     state.chartSelIdx = idx;
+    hideTooltip();
     syncInsightActive();
     drawBarChart(ps, 1);
     updateChartDetail(ps, idx);
-  }, { passive: true });
+  };
+
+  canvas.addEventListener('touchstart', e => touchSelect(e.touches[0].clientX), { passive: true });
+  canvas.addEventListener('touchmove',  e => touchSelect(e.touches[0].clientX), { passive: true });
+  canvas.addEventListener('touchend',   () => { lastBarTouchTs = Date.now(); }, { passive: true });
 }
 
 // Toggle between bar and wave visual modes.
@@ -888,6 +927,9 @@ function updateChartDetail(prices, idx) {
 }
 
 function showTooltip(hour, price, prices, mouseX, mouseY) {
+  // Tooltips are a hover affordance — never show them on touch phones; the price
+  // is already surfaced in the detail block below the chart.
+  if (!prefersHover()) return;
   const ps  = prices || activePrices();
   const box = document.getElementById('tooltipBox');
   const col = priceGradientColor(normalizePrice(price, ps));
@@ -899,28 +941,45 @@ function showTooltip(hour, price, prices, mouseX, mouseY) {
   document.getElementById('ttTier').textContent  = tierLabel(price);
   document.getElementById('ttTier').style.color  = col;
 
-  // Posicionar cerca del mouse con offset
-  const offsetX = 20;
-  const offsetY = 20;
-  let left = mouseX + offsetX;
-  let top = mouseY + offsetY;
-
-  // Evitar que se salga de la pantalla
+  // Position near the pointer, but always fully inside the viewport. On phones a
+  // naive left/top flip pushed the box off-screen, so we center it over the bar
+  // and float it above the finger, then clamp on every edge.
+  const margin = 10;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
   const rect = box.getBoundingClientRect();
-  if (left + rect.width > window.innerWidth - 10) {
-    left = mouseX - rect.width - offsetX;
-  }
-  if (top + rect.height > window.innerHeight - 10) {
-    top = mouseY - rect.height - offsetY;
-  }
+  const w = rect.width;
+  const h = rect.height;
 
-  box.style.left = left + 'px';
-  box.style.top = top + 'px';
+  let left;
+  let top;
+  if (vw <= 700) {
+    left = mouseX - w / 2;
+    top  = mouseY - h - 18;              // above the finger
+    if (top < margin) top = mouseY + 26; // no room above → drop below
+  } else {
+    const offset = 20;
+    left = (mouseX + offset + w > vw - margin) ? mouseX - w - offset : mouseX + offset;
+    top  = (mouseY + offset + h > vh - margin) ? mouseY - h - offset : mouseY + offset;
+  }
+  box.style.left = Math.max(margin, Math.min(left, vw - w - margin)) + 'px';
+  box.style.top  = Math.max(margin, Math.min(top,  vh - h - margin)) + 'px';
 }
 
 function hideTooltip() {
   const tooltip = document.getElementById('tooltipBox');
   if (tooltip) tooltip.style.display = 'none';
+}
+
+// The click-triggered heatmap price tooltip must never linger: dismiss it on
+// scroll or on any pointer interaction outside a heatmap cell / the bar chart.
+function initTooltipDismissal() {
+  const outside = e => {
+    if (!e.target.closest?.('.heatmap-cell, .bar-chart-wrapper')) hideTooltip();
+  };
+  window.addEventListener('scroll', hideTooltip, true);
+  document.addEventListener('click', outside, true);
+  document.addEventListener('touchstart', outside, { capture: true, passive: true });
 }
 
 /**
@@ -990,8 +1049,15 @@ function renderHeatmap(prices) {
     cell.className = 'heatmap-cell' + (isCurrent ? ' current-hour' : '');
     cell.style.background = col;
     cell.style.setProperty('--pulse-color', col);
-    cell.title = `${fmtHour(hour)}: ${fmtKwhShort(price)} €/kWh`;
-    cell.addEventListener('click', (e) => showTooltip(hour, price, prices, e.clientX, e.clientY));
+    // Heatmap tooltip is PC-only. On touch phones it stays hidden (it used to
+    // linger forever with no way to dismiss it). Native title also PC-only.
+    if (prefersHover()) {
+      cell.title = `${fmtHour(hour)}: ${fmtKwhShort(price)} €/kWh`;
+      cell.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showTooltip(hour, price, prices, e.clientX, e.clientY);
+      });
+    }
     grid.appendChild(cell);
   });
 }
@@ -1412,8 +1478,6 @@ let calcState = {
 function openCalcModal() {
   const modal = document.getElementById('calcModal');
   modal.style.display = 'flex';
-  // Reset to step 1
-  showCalcStep(1);
   // Reset selections
   calcState = { mode: null, duration: null, startHour: 0, power: 2000, selectedTab: 'today' };
   document.getElementById('manualPower').value = 2000;
@@ -1421,20 +1485,46 @@ function openCalcModal() {
   document.getElementById('manualDuration').value = 2;
   const autoPowerEl = document.getElementById('autoPower');
   if (autoPowerEl) autoPowerEl.value = 2000;
+  // Start by asking which day to calculate for.
+  refreshCalcDayAvailability();
+  showCalcStep('calcStepDay');
+}
+
+// Reflect whether tomorrow's tariffs are published yet (>= 20:30 ES) on the day
+// picker: before then the "Mañana" card is locked and explains when it unlocks.
+function refreshCalcDayAvailability() {
+  const card = document.getElementById('calcDayTomorrow');
+  const desc = document.getElementById('calcDayTomorrowDesc');
+  const lock = document.getElementById('calcDayLock');
+  if (!card) return;
+  const available = tomorrowPricesAvailable();
+  card.classList.toggle('locked', !available);
+  if (lock) lock.style.display = available ? 'none' : '';
+  if (desc) desc.textContent = available
+    ? 'Tarifas del día siguiente, ya publicadas'
+    : 'Se publican a partir de las 20:30';
+  hideCalcDayWarning();
+}
+function showCalcDayWarning() {
+  const w = document.getElementById('calcDayWarning');
+  if (!w) return;
+  w.innerHTML = '🌙 Las tarifas de <b>mañana</b> aún no están disponibles. Red Eléctrica las publica <b>a partir de las 20:30</b>. Vuelve más tarde o calcula con los precios de <b>hoy</b>.';
+  w.style.display = 'block';
+}
+function hideCalcDayWarning() {
+  const w = document.getElementById('calcDayWarning');
+  if (w) w.style.display = 'none';
 }
 
 function closeCalcModal() {
   document.getElementById('calcModal').style.display = 'none';
 }
 
-function showCalcStep(stepNum) {
-  document.querySelectorAll('.calc-step').forEach(step => {
-    step.style.display = 'none';
-  });
-  const targetStep = document.getElementById(`calcStep${stepNum}`);
-  if (targetStep) {
-    targetStep.style.display = 'block';
-  }
+function showCalcStep(step) {
+  document.querySelectorAll('.calc-step').forEach(s => { s.style.display = 'none'; });
+  const id = typeof step === 'number' ? `calcStep${step}` : step;
+  const target = document.getElementById(id);
+  if (target) target.style.display = 'block';
 }
 
 function initCalcModal() {
@@ -1453,6 +1543,26 @@ function initCalcModal() {
   if (backdrop) {
     backdrop.addEventListener('click', closeCalcModal);
   }
+
+  // Day selection cards (step 0) — pick today or tomorrow before anything else.
+  document.querySelectorAll('#calcStepDay .calc-mode-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const day = card.dataset.day;
+      if (day === 'tomorrow' && !tomorrowPricesAvailable()) {
+        showCalcDayWarning();
+        return;
+      }
+      calcState.selectedTab = day;
+      hideCalcDayWarning();
+      const label = document.getElementById('calcModeDayLabel');
+      if (label) label.textContent = day === 'tomorrow' ? 'Mañana' : 'Hoy';
+      showCalcStep(1);
+    });
+  });
+
+  // Back from mode selection to the day picker
+  const backToDay = document.getElementById('calcBackToDay');
+  if (backToDay) backToDay.addEventListener('click', () => showCalcStep('calcStepDay'));
 
   // Mode selection cards
   document.querySelectorAll('.calc-mode-card').forEach(card => {
@@ -1580,15 +1690,32 @@ function slotHourSet(slot) {
   return set;
 }
 
-function calculateAndShowResults() {
-  const prices = activePrices();
+// Resolve the price series for the calc modal's selected day, fetching tomorrow
+// on demand (once it's published, past 20:30). Returns [] if unavailable.
+async function resolveCalcPrices() {
+  if (calcState.selectedTab !== 'tomorrow') return state.todayPrices;
+  if (!state.tomorrowLoaded) {
+    showCalcStep(4);
+    const resultsEl = document.getElementById('calcResults');
+    if (resultsEl) resultsEl.innerHTML = '<p class="slot-msg">⏳ Cargando las tarifas de mañana…</p>';
+    state.tomorrowPrices = await loadTomorrowPrices();
+    state.tomorrowLoaded = true;
+  }
+  return state.tomorrowPrices;
+}
+
+async function calculateAndShowResults() {
+  const resultsEl = document.getElementById('calcResults');
+
+  // Use the day the user picked in step 0 — not the currently visible chart tab.
+  const prices = await resolveCalcPrices();
+
   if (!prices.length) {
-    document.getElementById('calcResults').innerHTML = '<p class="slot-msg">No hay datos disponibles.</p>';
+    resultsEl.innerHTML = '<p class="slot-msg">No hay datos disponibles para el día seleccionado.</p>';
     showCalcStep(4);
     return;
   }
 
-  const resultsEl = document.getElementById('calcResults');
   let html = '';
   const slotsData = [];
 
@@ -2635,6 +2762,8 @@ function initTabs() {
       state.activeTab = btn.dataset.tab;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      // Any tab other than "Mañana" must clear its pending/countdown overlay.
+      if (state.activeTab !== 'tomorrow') hideTomorrowMessage();
 
       // Show/hide history section
       if (state.activeTab === 'history') {
@@ -2652,27 +2781,164 @@ function initTabs() {
         } else {
           triggerCompareLoad(document.getElementById('compareDate').value);
         }
+      } else if (state.activeTab === 'tomorrow') {
+        hideHistorySection();
+        hideCompareSection();
+        handleTomorrowTab();
       } else {
         hideHistorySection();
         hideCompareSection();
-        const prices = activePrices();
-        const label  = state.activeTab === 'today'
-          ? `Tarifas por hora — Hoy (${new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})})`
-          : `Tarifas por hora — Mañana (${new Date(Date.now()+86400000).toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})})`;
-        document.getElementById('chartTitle').textContent = label;
-        hoveredIdx = null;
-        state.chartSelIdx = null;
-        animateBarChart(prices);
-        renderChartInsights(prices);
-        updateChartDetail(prices, null);
-        renderHeatmap(prices);
-        renderBestWindows(prices);
-        updateStats(prices);
-        drawGauge(state.activeTab === 'today' ? state.todayPrices : prices);
-        renderSlotWidget();
+        renderTariffTab();
       }
     });
   });
+}
+
+// Render the hourly-tariff view (chart + insights + heatmap + stats) for the
+// active day tab. Shared by "Hoy" and the loaded "Mañana" view.
+function renderTariffTab() {
+  const prices = activePrices();
+  const label  = state.activeTab === 'today'
+    ? `Tarifas por hora — Hoy (${new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})})`
+    : `Tarifas por hora — Mañana (${new Date(Date.now()+86400000).toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})})`;
+  document.getElementById('chartTitle').textContent = label;
+  hoveredIdx = null;
+  state.chartSelIdx = null;
+  animateBarChart(prices);
+  renderChartInsights(prices);
+  updateChartDetail(prices, null);
+  renderHeatmap(prices);
+  renderBestWindows(prices);
+  updateStats(prices);
+  drawGauge(state.activeTab === 'today' ? state.todayPrices : prices);
+  renderSlotWidget();
+}
+
+// ─── "MAÑANA" TAB ────────────────────────────────────────────────────────────
+// Next-day PVPC tariffs are published by REE ~20:30 (Spanish time). Before then
+// we show an animated countdown card; after, we fetch the real prices on demand.
+async function handleTomorrowTab() {
+  document.getElementById('chartTitle').textContent =
+    `Tarifas por hora — Mañana (${new Date(Date.now()+86400000).toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})})`;
+
+  if (!tomorrowPricesAvailable()) {
+    showTomorrowMessage('pending');
+    return;
+  }
+
+  if (!state.tomorrowLoaded) {
+    showTomorrowMessage('loading');
+    const data = await loadTomorrowPrices();
+    // Bail out if the user switched tabs while the request was in flight.
+    if (state.activeTab !== 'tomorrow') return;
+    state.tomorrowPrices = data;
+    state.tomorrowLoaded = true;
+  }
+
+  if (!state.tomorrowPrices.length) {
+    showTomorrowMessage('error');
+    return;
+  }
+
+  hideTomorrowMessage();
+  renderTariffTab();
+}
+
+let tomorrowCountdownTimer = null;
+
+// Chart pieces hidden while the "Mañana" overlay is on screen.
+function tomorrowChartInternals() {
+  return [
+    document.getElementById('chartModes'),
+    document.querySelector('.chart-insights'),
+    document.querySelector('.bar-chart-wrapper'),
+    document.getElementById('chartDetail'),
+  ];
+}
+
+function showTomorrowMessage(kind) {
+  const box = document.getElementById('tomorrowPending');
+  if (!box) return;
+  tomorrowChartInternals().forEach(el => { if (el) el.style.display = 'none'; });
+  box.className = `tomorrow-pending tp-${kind}`;
+  box.innerHTML = tomorrowMessageHTML(kind);
+  box.style.display = 'flex';
+
+  if (kind === 'pending') startTomorrowCountdown();
+  else stopTomorrowCountdown();
+
+  if (kind === 'error') {
+    box.querySelector('#tpRetry')?.addEventListener('click', () => {
+      state.tomorrowLoaded = false;
+      handleTomorrowTab();
+    });
+  }
+}
+
+function hideTomorrowMessage() {
+  stopTomorrowCountdown();
+  const box = document.getElementById('tomorrowPending');
+  if (box) box.style.display = 'none';
+  tomorrowChartInternals().forEach(el => { if (el) el.style.display = ''; });
+}
+
+function tomorrowMessageHTML(kind) {
+  if (kind === 'loading') {
+    return `
+      <div class="tp-spinner" aria-hidden="true"></div>
+      <h3 class="tp-title">Cargando las tarifas de mañana…</h3>
+      <p class="tp-text">Consultando los precios oficiales del PVPC en Red Eléctrica.</p>`;
+  }
+  if (kind === 'error') {
+    return `
+      <div class="tp-badge tp-badge-err" aria-hidden="true">⚠️</div>
+      <h3 class="tp-title">No hemos podido cargar las tarifas de mañana</h3>
+      <p class="tp-text">La conexión con la API no está disponible ahora mismo. Inténtalo de nuevo en unos segundos.</p>
+      <button class="tp-retry" id="tpRetry" type="button">Reintentar</button>`;
+  }
+  // pending — animated countdown to 20:30
+  return `
+    <div class="tp-aurora" aria-hidden="true"></div>
+    <div class="tp-badge" aria-hidden="true">
+      <span class="tp-clock-face">
+        <span class="tp-hand tp-hand-h"></span>
+        <span class="tp-hand tp-hand-m"></span>
+      </span>
+    </div>
+    <h3 class="tp-title">Las tarifas de mañana aún no están publicadas</h3>
+    <p class="tp-text">Red Eléctrica publica los precios de la luz del día siguiente <b>a partir de las 20:30</b>. Te mostramos la cuenta atrás:</p>
+    <div class="tp-countdown">
+      <span class="tp-countdown-label">Disponibles en</span>
+      <span class="tp-countdown-time" id="tpCountdownTime">--:--:--</span>
+    </div>
+    <span class="tp-hint">Se cargarán automáticamente en cuanto estén listas ✨</span>`;
+}
+
+function startTomorrowCountdown() {
+  stopTomorrowCountdown();
+  updateTomorrowCountdown();
+  tomorrowCountdownTimer = setInterval(updateTomorrowCountdown, 1000);
+}
+
+function stopTomorrowCountdown() {
+  if (tomorrowCountdownTimer) { clearInterval(tomorrowCountdownTimer); tomorrowCountdownTimer = null; }
+}
+
+function updateTomorrowCountdown() {
+  const { h, m, s } = spanishNowParts();
+  const diff = TOMORROW_PUBLISH_MINUTES * 60 - (h * 3600 + m * 60 + s);
+  if (diff <= 0) {
+    // 20:30 reached while the card is open → fetch the real prices right away.
+    stopTomorrowCountdown();
+    if (state.activeTab === 'tomorrow') handleTomorrowTab();
+    return;
+  }
+  const el = document.getElementById('tpCountdownTime');
+  if (!el) return;
+  const hh = Math.floor(diff / 3600);
+  const mm = Math.floor((diff % 3600) / 60);
+  const ss = diff % 60;
+  el.textContent = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
 }
 
 // ─── RESIZE ──────────────────────────────────────────────────────────────────
@@ -2713,6 +2979,7 @@ async function init() {
   initSlotWidget();
   initCalcModal();
   bindBarChartEvents();
+  initTooltipDismissal();
   initChartModes();
   initHistory();
   initCompare();
@@ -2726,12 +2993,23 @@ async function init() {
   });
   setTimeout(resizeCanvases, 80);
 
-  setInterval(async () => { await loadPrices(); renderAll(); }, 5*60*1000);
+  setInterval(async () => {
+    await loadPrices();
+    renderAll();
+    // Keep the "Mañana" view in sync after the background refresh.
+    if (state.activeTab === 'tomorrow') handleTomorrowTab();
+  }, 5*60*1000);
   setInterval(() => {
     // Midnight rollover: when the local day changes, reload so "Hoy" tracks the
     // real current day (prices are otherwise fetched for the day the page loaded on).
     if (state.loadedDayStr && getTodayStr() !== state.loadedDayStr) {
-      loadPrices().then(renderAll);
+      // Yesterday's "Mañana" is now "Hoy" — drop it so it is re-fetched fresh.
+      state.tomorrowPrices = [];
+      state.tomorrowLoaded = false;
+      loadPrices().then(() => {
+        renderAll();
+        if (state.activeTab === 'tomorrow') handleTomorrowTab();
+      });
     }
     updateCurrentPrice();
     drawRadialClock(state.todayPrices);
