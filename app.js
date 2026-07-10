@@ -193,6 +193,29 @@ async function loadPrices() {
   return true;
 }
 
+// The day-ahead / PVPC market now publishes sub-hourly ("cuarto horario",
+// 15-min) values, so a raw series can contain up to 4 records per hour. The
+// charts render one bar per hour (like the "Tarifas por hora" tab) and most
+// lookups assume a single record per hour, so collapse any sub-hourly series
+// into one hourly value — the mean of that hour's quarter prices, matching
+// REE's hourly equivalent. Already-hourly data passes through unchanged.
+function aggregateToHourly(prices) {
+  if (!prices?.length) return prices;
+  const byHour = new Map();
+  for (const p of prices) {
+    const group = byHour.get(p.hour) || [];
+    group.push(p);
+    byHour.set(p.hour, group);
+  }
+  return [...byHour.entries()]
+    .map(([hour, group]) => ({
+      hour,
+      price: group.reduce((sum, r) => sum + r.price, 0) / group.length,
+      datetime: group.reduce((a, b) => (a.datetime <= b.datetime ? a : b)).datetime,
+    }))
+    .sort((a, b) => a.hour - b.hour);
+}
+
 // Tomorrow's PVPC tariffs are fetched lazily — only when the user opens the
 // "Mañana" tab after 20:30 ES, once REE has actually published them. No demo
 // fallback here: before 20:30 the data genuinely does not exist yet.
@@ -200,7 +223,7 @@ async function loadTomorrowPrices() {
   const tomorrow = getTomorrowStr();
   let data = await fetchREDataPrices(tomorrow);
   if (!data?.length) data = await fetchESIOSPrices(tomorrow);
-  return data?.length ? data : [];
+  return data?.length ? aggregateToHourly(data) : [];
 }
 
 async function loadHistoryDate(dateStr) {
